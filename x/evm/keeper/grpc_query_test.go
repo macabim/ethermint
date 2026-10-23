@@ -2384,13 +2384,14 @@ func (suite *GRPCServerTestSuiteSuite) TestSimulator_Validation_FeeCapTooLow() {
 		BlockStateCalls: []rpctypes.SimBlock{
 			{
 				StateOverrides: &stateOverride,
+				BlockOverrides: &rpctypes.SimBlockOverrides{BaseFeePerGas: (*hexutil.Big)(big.NewInt(100))},
 				Calls:          []json.RawMessage{callJSON},
 			},
 		},
 		Validation: true,
 	}
 	baseHeader := suite.ctxBaseHeader(25_000_000)
-	baseHeader.BaseFee = big.NewInt(100) // higher than maxFeePerGas=1
+	baseHeader.BaseFee = big.NewInt(100)
 	resp, err := suite.simulateRequest(opts, baseHeader, 25_000_000)
 	suite.Require().NoError(err)
 	// Validation errors propagate as simulation-level errors.
