@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"math"
 	"math/big"
 	"sort"
@@ -96,7 +97,14 @@ func (sim *Simulator) processBlock(
 		if header.BaseFee == nil {
 			if sim.validate {
 				// Use native fee parameters and the committed parent gas-wanted value.
-				header.BaseFee = sim.keeper.feeMarketKeeper.CalculateBaseFee(ctx.WithBlockHeight(header.Number.Int64()))
+				if parent.GasLimit > math.MaxInt64 {
+					return nil, nil, nil, fmt.Errorf("parent gas limit overflows int64")
+				}
+				feeParams := ctx.ConsensusParams()
+				// Query contexts need not carry consensus parameters; the RPC pins this limit to the parent.
+				feeParams.Block = &cmtproto.BlockParams{MaxGas: int64(parent.GasLimit)}
+				feeCtx := ctx.WithConsensusParams(feeParams).WithBlockHeight(header.Number.Int64())
+				header.BaseFee = sim.keeper.feeMarketKeeper.CalculateBaseFee(feeCtx)
 				if header.BaseFee == nil {
 					header.BaseFee = new(big.Int)
 				}
