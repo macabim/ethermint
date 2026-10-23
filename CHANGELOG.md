@@ -2,6 +2,7 @@
 
 ## Macabim pending transaction lookup
 
+- Use the native fee market and minimum gas charge for validated next-block simulations. Prepay gas before execution. Reject validated multi-block requests and allow equal-second timestamps.
 - Cache recently validated transaction bodies before publishing pending hashes. Bound the cache to 4096 entries and two seconds.
 Guiding Principles:
 
