@@ -181,8 +181,14 @@ func WithMempoolClient(c appmempool.MempoolClient) Option {
 	return func(b *Backend) { b.mempoolClient = c }
 }
 
+// WithPendingTransaction supplies recently validated transaction bodies.
+func WithPendingTransaction(lookup func(common.Hash) *evmtypes.MsgEthereumTx) Option {
+	return func(b *Backend) { b.pendingTransaction = lookup }
+}
+
 // Backend implements the BackendI interface
 type Backend struct {
+	pendingTransaction  func(common.Hash) *evmtypes.MsgEthereumTx
 	ctx                 context.Context
 	clientCtx           client.Context
 	queryClient         *rpctypes.QueryClient // gRPC query client

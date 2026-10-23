@@ -1,4 +1,8 @@
 <!--
+
+## Macabim pending transaction lookup
+
+- Cache recently validated transaction bodies before publishing pending hashes. Bound the cache to 4096 entries and two seconds.
 Guiding Principles:
 
 Changelogs are for humans, not machines.

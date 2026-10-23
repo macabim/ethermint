@@ -141,6 +141,11 @@ func (b *Backend) getTransactionByHashPending(txHash common.Hash) (*rpctypes.RPC
 // findPendingEthMsgByHash looks up a pending Ethereum transaction from the mempool
 // by hash. Returns (nil, nil) if not found.
 func (b *Backend) findPendingEthMsgByHash(txHash common.Hash) (*evmtypes.MsgEthereumTx, error) {
+	if b.pendingTransaction != nil {
+		if tx := b.pendingTransaction(txHash); tx != nil {
+			return tx, nil
+		}
+	}
 	txs, err := b.PendingTransactions()
 	if err != nil {
 		b.logger.Debug("tx not found", "hash", txHash, "error", err.Error())
