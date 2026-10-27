@@ -2,15 +2,15 @@ package keeper
 
 import (
 	"bytes"
-	sdkmath "cosmossdk.io/math"
 	"encoding/json"
 	"errors"
 	"fmt"
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"math"
 	"math/big"
 	"sort"
 
+	sdkmath "cosmossdk.io/math"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"

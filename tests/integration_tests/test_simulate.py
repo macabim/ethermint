@@ -5,8 +5,15 @@ import pytest  # type: ignore[import-not-found]
 from .utils import ADDRS, KEYS, send_transaction
 
 METHOD = "eth_simulateV1"
-
+TRANSFER_GAS_LIMIT = 100_000
 pytestmark = pytest.mark.filter
+
+
+def assert_transfer_gas(ethermint_call, geth_call):
+    """The default test chain charges at least half the transaction gas limit."""
+    assert int(geth_call["gasUsed"], 16) == 21_000
+    assert int(ethermint_call["gasUsed"], 16) == TRANSFER_GAS_LIMIT // 2
+
 
 # Test addresses
 SENDER = "0xc000000000000000000000000000000000000000"
@@ -89,6 +96,7 @@ def test_simulate_simple_transfer(ethermint, geth):
                             "from": SENDER,
                             "to": RECEIVER,
                             "value": "0x3e8",
+                            "gas": hex(TRANSFER_GAS_LIMIT),
                         }
                     ],
                 }
@@ -108,7 +116,7 @@ def test_simulate_simple_transfer(ethermint, geth):
     eth_call = eth_block["calls"][0]
     geth_call = geth_block["calls"][0]
     assert eth_call["status"] == geth_call["status"] == "0x1"
-    assert eth_call["gasUsed"] == geth_call["gasUsed"]
+    assert_transfer_gas(eth_call, geth_call)
     assert eth_call["returnData"] == geth_call["returnData"]
     assert eth_call["logs"] == geth_call["logs"] == []
 
@@ -127,11 +135,13 @@ def test_simulate_multi_block(ethermint, geth):
                             "from": SENDER,
                             "to": RECEIVER,
                             "value": "0x1",
+                            "gas": hex(TRANSFER_GAS_LIMIT),
                         },
                         {
                             "from": SENDER,
                             "to": RECEIVER2,
                             "value": "0x1",
+                            "gas": hex(TRANSFER_GAS_LIMIT),
                         },
                     ],
                 },
@@ -141,6 +151,7 @@ def test_simulate_multi_block(ethermint, geth):
                             "from": RECEIVER,
                             "to": RECEIVER2,
                             "value": "0x1",
+                            "gas": hex(TRANSFER_GAS_LIMIT),
                         },
                     ],
                 },
@@ -165,9 +176,9 @@ def test_simulate_multi_block(ethermint, geth):
                 == geth_res["result"][bi]["calls"][ci]["status"]
                 == "0x1"
             )
-            assert (
-                eth_res["result"][bi]["calls"][ci]["gasUsed"]
-                == geth_res["result"][bi]["calls"][ci]["gasUsed"]
+            assert_transfer_gas(
+                eth_res["result"][bi]["calls"][ci],
+                geth_res["result"][bi]["calls"][ci],
             )
 
 
@@ -467,6 +478,7 @@ def test_simulate_validation_success(ethermint, geth):
                             "from": SENDER,
                             "to": RECEIVER,
                             "value": "0x1",
+                            "gas": hex(TRANSFER_GAS_LIMIT),
                             "nonce": "0x0",
                             "maxFeePerGas": "0x174876e800",
                             "maxPriorityFeePerGas": "0x0",
@@ -487,7 +499,7 @@ def test_simulate_validation_success(ethermint, geth):
     eth_call = eth_res["result"][0]["calls"][0]
     geth_call = geth_res["result"][0]["calls"][0]
     assert eth_call["status"] == geth_call["status"] == "0x1"
-    assert eth_call["gasUsed"] == geth_call["gasUsed"]
+    assert_transfer_gas(eth_call, geth_call)
 
 
 def test_simulate_chain_linkage(ethermint, geth):
