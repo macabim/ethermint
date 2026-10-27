@@ -9,10 +9,11 @@ import (
 	"math/big"
 	"sort"
 
+	sdkmath "cosmossdk.io/math"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -50,6 +51,9 @@ func (sim *Simulator) Execute(ctx sdk.Context, blocks []rpctypes.SimBlock) ([]*r
 	blocks, err = sim.sanitizeChain(blocks)
 	if err != nil {
 		return nil, err
+	}
+	if sim.validate && len(blocks) != 1 {
+		return nil, &rpctypes.InvalidParamsError{Message: "validated simulation supports one next block"}
 	}
 	headers, err := sim.makeHeaders(blocks)
 	if err != nil {
@@ -92,7 +96,18 @@ func (sim *Simulator) processBlock(
 	if sim.chainConfig.IsLondon(header.Number) {
 		if header.BaseFee == nil {
 			if sim.validate {
-				header.BaseFee = eip1559.CalcBaseFee(sim.chainConfig, parent)
+				// Use native fee parameters and the committed parent gas-wanted value.
+				if parent.GasLimit > math.MaxInt64 {
+					return nil, nil, nil, fmt.Errorf("parent gas limit overflows int64")
+				}
+				feeParams := ctx.ConsensusParams()
+				// Query contexts need not carry consensus parameters; the RPC pins this limit to the parent.
+				feeParams.Block = &cmtproto.BlockParams{MaxGas: int64(parent.GasLimit)}
+				feeCtx := ctx.WithConsensusParams(feeParams).WithBlockHeight(header.Number.Int64())
+				header.BaseFee = sim.keeper.feeMarketKeeper.CalculateBaseFee(feeCtx)
+				if header.BaseFee == nil {
+					header.BaseFee = new(big.Int)
+				}
 			} else {
 				header.BaseFee = big.NewInt(0)
 			}
@@ -431,6 +446,10 @@ func (sim *Simulator) applyCall(
 		return applyCallResult{}, fmt.Errorf("%w: code size %v limit %v", core.ErrMaxInitCodeSizeExceeded, len(msg.Data), params.MaxInitCodeSize)
 	}
 
+	// Match ante-handler gas prepayment so contracts observe the correct sender balance.
+	prepaidGas := new(uint256.Int).Mul(uint256.NewInt(msg.GasLimit), uint256.MustFromBig(msg.GasPrice))
+	sim.state.SubBalance(sender, prepaidGas, tracing.BalanceDecreaseGasBuy)
+
 	// Prepare access list and transient storage
 	sim.state.Prepare(rules, msg.From, evm.Context.Coinbase, msg.To, activePrecompiles, msg.AccessList)
 
@@ -484,14 +503,17 @@ func (sim *Simulator) applyCall(
 	}
 
 	gasUsed := msg.GasLimit - leftoverGas
-
-	// charge gas
-	if msg.GasPrice.Sign() > 0 {
-		gasPriceU256, _ := uint256.FromBig(msg.GasPrice)
-		cost := new(uint256.Int).SetUint64(gasUsed)
-		cost.Mul(cost, gasPriceU256)
-		sim.state.SubBalance(sender, cost, tracing.BalanceDecreaseGasBuy)
+	// Charge the same minimum gas fraction as ApplyMessageWithConfig.
+	multiplier := sim.keeper.feeMarketKeeper.GetParams(sim.state.Context()).MinGasMultiplier
+	if !multiplier.IsNil() {
+		minimum := sdkmath.LegacyNewDecFromBigInt(new(big.Int).SetUint64(msg.GasLimit)).Mul(multiplier).TruncateInt().Uint64()
+		gasUsed = max(gasUsed, minimum)
 	}
+
+	// Refund only unused charged gas; the minimum gas fraction still applies.
+	refundGas := new(uint256.Int).Mul(uint256.NewInt(msg.GasLimit-gasUsed), uint256.MustFromBig(msg.GasPrice))
+	sim.state.AddBalance(sender, refundGas, tracing.BalanceIncreaseGasReturn)
+
 	if !evm.Config.NoBaseFee || msg.GasFeeCap.Sign() != 0 || msg.GasTipCap.Sign() != 0 {
 		effectiveTip := new(big.Int).Set(msg.GasTipCap)
 		if evm.Context.BaseFee != nil {
@@ -539,7 +561,7 @@ func (sim *Simulator) sanitizeCall(call *evmtypes.TransactionArgs, state *stated
 }
 
 // sanitizeChain checks the chain integrity. Specifically it checks that
-// block numbers and timestamp are strictly increasing, setting default values
+// block numbers increase and timestamps do not decrease, setting default values
 // when necessary. Gaps in block numbers are filled with empty blocks.
 // Note: It modifies the block's override object.
 func (sim *Simulator) sanitizeChain(blocks []rpctypes.SimBlock) ([]rpctypes.SimBlock, error) {
@@ -598,8 +620,8 @@ func (sim *Simulator) sanitizeChain(blocks []rpctypes.SimBlock) ([]rpctypes.SimB
 			block.BlockOverrides.Time = (*hexutil.Uint64)(&t)
 		} else {
 			t = uint64(*block.BlockOverrides.Time)
-			if t <= prevTimestamp {
-				return nil, &rpctypes.InvalidBlockTimestampError{Message: fmt.Sprintf("block timestamps must be in order: %d <= %d", t, prevTimestamp)}
+			if t < prevTimestamp {
+				return nil, &rpctypes.InvalidBlockTimestampError{Message: fmt.Sprintf("block timestamps must be in order: %d < %d", t, prevTimestamp)}
 			}
 		}
 		prevTimestamp = t

@@ -2384,13 +2384,14 @@ func (suite *GRPCServerTestSuiteSuite) TestSimulator_Validation_FeeCapTooLow() {
 		BlockStateCalls: []rpctypes.SimBlock{
 			{
 				StateOverrides: &stateOverride,
+				BlockOverrides: &rpctypes.SimBlockOverrides{BaseFeePerGas: (*hexutil.Big)(big.NewInt(100))},
 				Calls:          []json.RawMessage{callJSON},
 			},
 		},
 		Validation: true,
 	}
 	baseHeader := suite.ctxBaseHeader(25_000_000)
-	baseHeader.BaseFee = big.NewInt(100) // higher than maxFeePerGas=1
+	baseHeader.BaseFee = big.NewInt(100)
 	resp, err := suite.simulateRequest(opts, baseHeader, 25_000_000)
 	suite.Require().NoError(err)
 	// Validation errors propagate as simulation-level errors.
@@ -2872,4 +2873,50 @@ func (suite *GRPCServerTestSuiteSuite) TestCreateAccessList_VmError() {
 	suite.Require().NotEmpty(result.Error)
 	suite.Require().NotZero(uint64(result.GasUsed))
 	suite.Require().NotEmpty(result.AccessList)
+}
+
+func (suite *GRPCServerTestSuiteSuite) TestSimulator_NativeFeesAndSameSecondBlock() {
+	oldFee, oldLondon := suite.enableFeemarket, suite.enableLondonHF
+	suite.enableFeemarket, suite.enableLondonHF = true, true
+	defer func() { suite.enableFeemarket, suite.enableLondonHF = oldFee, oldLondon }()
+	suite.SetupTest()
+	suite.App.EvmKeeper.BeginBlock(suite.Ctx)
+	p := suite.App.FeeMarketKeeper.GetParams(suite.Ctx)
+	p.BaseFee = sdkmath.NewInt(375_000_000_000)
+	p.MinGasPrice = sdkmath.LegacyNewDec(375_000_000_000)
+	p.MinGasMultiplier = sdkmath.LegacyNewDecWithPrec(5, 1)
+	suite.Require().NoError(suite.App.FeeMarketKeeper.SetParams(suite.Ctx, p))
+	base := suite.ctxBaseHeader(25_000_000)
+	base.BaseFee = p.BaseFee.BigInt()
+	target := tests.GenerateAddress()
+	code := hexutil.Bytes{0x33, 0x31, 0x60, 0, 0x52, 0x60, 0x20, 0x60, 0, 0xf3}
+	balance := new(big.Int).Exp(big.NewInt(10), big.NewInt(24), nil)
+	nonce := hexutil.Uint64(0)
+	overrides := rpctypes.SimStateOverride{
+		suite.Address: {Balance: (*hexutil.Big)(balance), Nonce: &nonce},
+		target:        {Code: &code},
+	}
+	call, err := json.Marshal(map[string]interface{}{"from": suite.Address.Hex(), "to": target.Hex(), "gas": "0x186a0", "gasPrice": hexutil.EncodeBig(p.BaseFee.BigInt()), "nonce": "0x0"})
+	suite.Require().NoError(err)
+	stamp := hexutil.Uint64(base.Time)
+	opts := rpctypes.SimOpts{Validation: true, BlockStateCalls: []rpctypes.SimBlock{{StateOverrides: &overrides, BlockOverrides: &rpctypes.SimBlockOverrides{Time: &stamp}, Calls: []json.RawMessage{call}}}}
+	resp, err := suite.simulateRequest(opts, base, 25_000_000)
+	suite.Require().NoError(err)
+	suite.Require().Zero(resp.ErrorCode, resp.ErrorMessage)
+	var result []struct {
+		BaseFee *hexutil.Big `json:"baseFeePerGas"`
+		Calls   []struct {
+			GasUsed    hexutil.Uint64 `json:"gasUsed"`
+			ReturnData hexutil.Bytes  `json:"returnData"`
+		} `json:"calls"`
+	}
+	suite.Require().NoError(json.Unmarshal(resp.Result, &result))
+	suite.Require().Equal(p.BaseFee.BigInt(), result[0].BaseFee.ToInt())
+	suite.Require().Equal(uint64(50_000), uint64(result[0].Calls[0].GasUsed))
+	prepaid := new(big.Int).Mul(big.NewInt(100_000), p.BaseFee.BigInt())
+	suite.Require().Equal(new(big.Int).Sub(balance, prepaid), new(big.Int).SetBytes(result[0].Calls[0].ReturnData))
+	opts.BlockStateCalls = append(opts.BlockStateCalls, rpctypes.SimBlock{})
+	resp, err = suite.simulateRequest(opts, base, 25_000_000)
+	suite.Require().NoError(err)
+	suite.Require().Contains(resp.ErrorMessage, "one next block")
 }

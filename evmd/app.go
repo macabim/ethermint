@@ -148,7 +148,6 @@ import (
 
 	consensusparamkeeper "github.com/cosmos/cosmos-sdk/x/consensus/keeper"
 	consensusparamtypes "github.com/cosmos/cosmos-sdk/x/consensus/types"
-	"github.com/ethereum/go-ethereum/common"
 
 	// Force-load the tracer engines to trigger registration due to Go-Ethereum v1.10.15 changes
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
@@ -809,9 +808,9 @@ func (app *EthermintApp) setAnteHandler(txConfig client.TxConfig, mempoolMaxTxs 
 	app.SetAnteHandler(anteHandler)
 }
 
-func (app *EthermintApp) onPendingTx(hash common.Hash) {
+func (app *EthermintApp) onPendingTx(tx *evmtypes.MsgEthereumTx) {
 	for _, listener := range app.pendingTxListeners {
-		listener(hash)
+		listener(tx)
 	}
 }
 

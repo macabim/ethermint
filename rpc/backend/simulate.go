@@ -32,6 +32,9 @@ func (b *Backend) SimulateV1(opts rpctypes.SimOpts, blockNr rpctypes.BlockNumber
 		return nil, err
 	}
 
+	// Keep state, fees, and proposer reads on the header selected above.
+	blockNr = rpctypes.BlockNumber(header.Number.Int64())
+
 	// EthHeaderFromTendermint leaves GasLimit at 0; fill it from
 	// consensus params so the simulated blocks inherit the real limit.
 	if header.GasLimit == 0 {

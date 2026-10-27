@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 
 	"cosmossdk.io/log/v2"
 	cmtquery "github.com/cometbft/cometbft/libs/pubsub/query"
@@ -41,6 +44,11 @@ var (
 	evmTxHashKey = fmt.Sprintf("%s.%s", evmtypes.TypeMsgEthereumTx, evmtypes.AttributeKeyEthereumTxHash)
 )
 
+type pendingTransaction struct {
+	tx       *evmtypes.MsgEthereumTx
+	received time.Time
+}
+
 type RPCHeader struct {
 	EthHeader *ethtypes.Header
 	Hash      common.Hash
@@ -63,6 +71,7 @@ type RPCStream struct {
 
 	// pendingTxStream is backed by check-tx ante handler
 	pendingTxStream *Stream[common.Hash]
+	pendingTxs      *lru.Cache[common.Hash, pendingTransaction]
 
 	wg               sync.WaitGroup
 	validatorAccount validatorAccountFunc
@@ -74,8 +83,13 @@ func NewRPCStreams(
 	txDecoder sdk.TxDecoder,
 	validatorAccount validatorAccountFunc,
 ) *RPCStream {
+	pendingTxs, err := lru.New[common.Hash, pendingTransaction](4096)
+	if err != nil {
+		panic(err)
+	}
 	return &RPCStream{
 		evtClient:        evtClient,
+		pendingTxs:       pendingTxs,
 		logger:           logger,
 		txDecoder:        txDecoder,
 		validatorAccount: validatorAccount,
@@ -138,8 +152,22 @@ func (s *RPCStream) LogStream() *Stream[*ethtypes.Log] {
 }
 
 // ListenPendingTx is a callback passed to application to listen for pending transactions in CheckTx.
-func (s *RPCStream) ListenPendingTx(hash common.Hash) {
+func (s *RPCStream) ListenPendingTx(tx *evmtypes.MsgEthereumTx) {
+	// Copy the message before publishing; the ante handler owns the original.
+	hash := tx.Hash()
+	copyTx := &evmtypes.MsgEthereumTx{Raw: tx.Raw, From: append([]byte(nil), tx.From...)}
+	s.pendingTxs.Add(hash, pendingTransaction{tx: copyTx, received: time.Now()})
 	s.PendingTxStream().Add(hash)
+}
+
+// PendingTransaction returns a recently validated transaction before pool admission completes.
+// Mined lookup takes precedence; this bounded cache expires after two seconds.
+func (s *RPCStream) PendingTransaction(hash common.Hash) *evmtypes.MsgEthereumTx {
+	entry, ok := s.pendingTxs.Get(hash)
+	if !ok || time.Since(entry.received) > 2*time.Second {
+		return nil
+	}
+	return &evmtypes.MsgEthereumTx{Raw: entry.tx.Raw, From: append([]byte(nil), entry.tx.From...)}
 }
 
 func (s *RPCStream) start(
